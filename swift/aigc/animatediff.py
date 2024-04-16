@@ -30,6 +30,11 @@ from torch.utils.data.dataset import Dataset
 from torch.utils.data.distributed import DistributedSampler
 from tqdm.auto import tqdm
 from transformers import CLIPTextModel, CLIPTokenizer
+import lmdb
+from pickle import loads
+from torch.utils.data import Dataset
+from torchvision.io import decode_jpeg
+from torchvision.transforms import Resize, Compose
 
 from swift import LoRAConfig, Swift, get_logger, push_to_hub
 from swift.aigc.utils import AnimateDiffArguments
@@ -127,6 +132,105 @@ class AnimateDiffDataset(Dataset):
         sample = dict(pixel_values=pixel_values, text=name)
         return sample
 
+
+
+class LMDBDataset(Dataset):
+    def __init__(self, lmdb_dir, video_len, desired_rgb_shape, start_ratio=0, end_ratio=1, scaling_rate=1):
+        super(LMDBDataset).__init__()
+        self.scaling_rate = scaling_rate
+        self.video_len = video_len
+        self.lmdb_dir = lmdb_dir
+        env = lmdb.open(lmdb_dir, readonly=True, create=False, lock=False)
+        self.transforms = Compose([
+            Resize(desired_rgb_shape, antialias=True),
+        ])
+        with env.begin() as txn:
+            dataset_len = loads(txn.get('cur_step'.encode()))
+            episode_num = loads(txn.get(f'cur_episode_{dataset_len}'.encode()))
+            first_episode = int(episode_num * start_ratio)
+            last_episode = int(episode_num * end_ratio)
+            self.start_step = loads(txn.get(f'episode_start_{first_episode}'.encode()))
+            self.end_step = loads(txn.get(f'episode_end_{last_episode}'.encode()))
+        env.close()
+
+        self.pixel_transforms = transforms.Compose([
+            transforms.RandomHorizontalFlip(),
+            transforms.Normalize(
+                mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], inplace=True),
+        ])
+
+    def open_lmdb(self):
+        self.env = lmdb.open(self.lmdb_dir, readonly=True, create=False, lock=False)
+        self.txn = self.env.begin()
+
+    def __getitem__(self, idx):
+        if hasattr(self, 'env') == 0:
+            self.open_lmdb()
+
+        idx = idx + self.start_step
+
+        jpg = loads(self.txn.get(f'rgb_{idx}'.encode()))
+        rgb = self.transforms(decode_jpeg(jpg))
+
+        cur_episode = loads(self.txn.get(f'cur_episode_{idx}'.encode()))
+        episode_start = loads(self.txn.get(f'episode_start_{cur_episode}'.encode()))
+        episode_end = loads(self.txn.get(f'episode_end_{cur_episode}'.encode()))
+
+        inst_emb = loads(self.txn.get(f'inst_emb_{cur_episode}'.encode()))
+        inst = loads(self.txn.get(f'inst_{cur_episode}'.encode()))
+        rgbs = torch.zeros((self.video_len,) + rgb.shape)
+        rgbs[0] = rgb
+
+        for i in range(1, self.video_len):
+            if idx + i > episode_end:
+                pass
+            else:
+                jpg = loads(self.txn.get(f'rgb_{idx + i}'.encode()))
+                rgb = self.transforms(decode_jpeg(jpg))
+            rgbs[i] = rgb
+
+        pixel_values = self.pixel_transforms(rgbs)
+        sample = dict(pixel_values=pixel_values, text=inst[0])
+        return sample
+
+    def __len__(self):
+        return int((self.end_step - self.start_step + 1) * self.scaling_rate)
+
+
+class DummyLMDBDataset(Dataset):
+    def __init__(self, lmdb_dir, video_len, desired_rgb_shape, start_ratio=0, end_ratio=1, scaling_rate=1):
+        super(DummyLMDBDataset, self).__init__()
+        self.scaling_rate = scaling_rate
+        self.video_len = video_len
+        self.lmdb_dir = lmdb_dir
+        self.desired_rgb_shape = desired_rgb_shape
+        self.start_step = 0
+        self.end_step = 1000
+
+        self.transforms = Compose([
+            Resize(desired_rgb_shape, antialias=True),
+        ])
+        self.pixel_transforms = Compose([
+            transforms.RandomHorizontalFlip(),
+            transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], inplace=True),
+        ])
+
+    def __getitem__(self, idx):
+        idx = idx + self.start_step
+        random_rgb = torch.rand((3,) + self.desired_rgb_shape)
+        rgbs = torch.zeros((self.video_len, 3) + self.desired_rgb_shape)
+        for i in range(self.video_len):
+            rgbs[i] = random_rgb
+
+        pixel_values = self.pixel_transforms(rgbs)
+        sample = {
+            'pixel_values': pixel_values,
+            'text': 'dummy instruction'
+        }
+        return sample
+
+    def __len__(self):
+        return int((self.end_step - self.start_step + 1) * self.scaling_rate)
 
 def save_videos_grid(videos: torch.Tensor,
                      path: str,
@@ -278,13 +382,19 @@ def animatediff_sft(args: AnimateDiffArguments) -> None:
     text_encoder.to(local_rank)
 
     # Get the training dataset
-    train_dataset = AnimateDiffDataset(
-        csv_path=args.csv_path,
-        video_folder=args.video_folder,
-        sample_size=args.sample_size,
-        sample_stride=args.sample_stride,
-        sample_n_frames=args.sample_n_frames,
-        dataset_sample_size=args.dataset_sample_size,
+    # train_dataset = AnimateDiffDataset(
+    #     csv_path=args.csv_path,
+    #     video_folder=args.video_folder,
+    #     sample_size=args.sample_size,
+    #     sample_stride=args.sample_stride,
+    #     sample_n_frames=args.sample_n_frames,
+    #     dataset_sample_size=args.dataset_sample_size,
+    # )
+
+    train_dataset = DummyLMDBDataset(
+        args.video_folder,
+        args.sample_n_frames,
+        (args.sample_size, args.sample_size),
     )
 
     if not is_dist():
