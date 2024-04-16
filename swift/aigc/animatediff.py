@@ -390,13 +390,22 @@ def animatediff_sft(args: AnimateDiffArguments) -> None:
     #     sample_n_frames=args.sample_n_frames,
     #     dataset_sample_size=args.dataset_sample_size,
     # )
-
-    train_dataset = DummyLMDBDataset(
-        args.video_folder,
-        args.sample_n_frames,
-        (args.sample_size, args.sample_size),
-        sample_stride=args.sample_stride
-    )
+    if os.path.exists(args.video_folder):
+        train_dataset = LMDBDataset(
+            args.video_folder,
+            args.sample_n_frames,
+            (args.sample_size, args.sample_size),
+            sample_stride=args.sample_stride
+        )
+    else:
+        train_dataset = DummyLMDBDataset(
+            args.video_folder,
+            args.sample_n_frames,
+            (args.sample_size, args.sample_size),
+            sample_stride=args.sample_stride
+        )
+        if is_main_process:
+            print(f'Warning: {args.video_folder} not exist! Using dummy dataset.')
 
     if not is_dist():
         sampler = RandomSampler(train_dataset)
