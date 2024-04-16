@@ -133,12 +133,12 @@ class AnimateDiffDataset(Dataset):
         return sample
 
 
-
 class LMDBDataset(Dataset):
-    def __init__(self, lmdb_dir, video_len, desired_rgb_shape, start_ratio=0, end_ratio=1, scaling_rate=1):
+    def __init__(self, lmdb_dir, video_len, desired_rgb_shape, sample_stride=1, start_ratio=0, end_ratio=1, scaling_rate=1):
         super(LMDBDataset).__init__()
         self.scaling_rate = scaling_rate
         self.video_len = video_len
+        self.sample_stride = sample_stride
         self.lmdb_dir = lmdb_dir
         env = lmdb.open(lmdb_dir, readonly=True, create=False, lock=False)
         self.transforms = Compose([
@@ -182,7 +182,7 @@ class LMDBDataset(Dataset):
         rgbs[0] = rgb
 
         for i in range(1, self.video_len):
-            if idx + i > episode_end:
+            if idx + i * self.sample_stride > episode_end:
                 pass
             else:
                 jpg = loads(self.txn.get(f'rgb_{idx + i}'.encode()))
@@ -198,7 +198,7 @@ class LMDBDataset(Dataset):
 
 
 class DummyLMDBDataset(Dataset):
-    def __init__(self, lmdb_dir, video_len, desired_rgb_shape, start_ratio=0, end_ratio=1, scaling_rate=1):
+    def __init__(self, lmdb_dir, video_len, desired_rgb_shape, sample_stride=1, start_ratio=0, end_ratio=1, scaling_rate=1):
         super(DummyLMDBDataset, self).__init__()
         self.scaling_rate = scaling_rate
         self.video_len = video_len
@@ -395,6 +395,7 @@ def animatediff_sft(args: AnimateDiffArguments) -> None:
         args.video_folder,
         args.sample_n_frames,
         (args.sample_size, args.sample_size),
+        sample_stride=args.sample_stride
     )
 
     if not is_dist():
