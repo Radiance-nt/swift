@@ -586,6 +586,7 @@ def animatediff_sft(args: AnimateDiffArguments) -> None:
             # Wandb logging
             if is_main_process and args.use_wandb:
                 wandb.log({'train_loss': loss.item()}, step=global_step)
+                wandb.log({'lr': list(optimizer.param_groups)[0]['lr']}, step=global_step)
 
             # Save checkpoint
             if is_main_process and (global_step % args.save_steps == 0
