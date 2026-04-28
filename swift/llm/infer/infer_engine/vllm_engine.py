@@ -404,6 +404,7 @@ class VllmEngine(InferEngine):
         return super()._get_logprobs(logprobs_list, token_ids, top_logprobs)
 
     def _prepare_generation_config(self, request_config: RequestConfig) -> SamplingParams:
+        supported_keys = set(getattr(SamplingParams, '__struct_fields__', ()) or ())
         kwargs = {'max_tokens': request_config.max_tokens}
         for key in ['temperature', 'top_k', 'top_p', 'repetition_penalty']:
             new_value = getattr(request_config, key)
@@ -430,6 +431,8 @@ class VllmEngine(InferEngine):
 
         # TODO: beam search
         for key in ['n', 'best_of', 'frequency_penalty', 'presence_penalty', 'seed']:
+            if supported_keys and key not in supported_keys:
+                continue
             kwargs[key] = getattr(request_config, key)
 
         res = SamplingParams(**kwargs)

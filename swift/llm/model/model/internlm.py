@@ -4,6 +4,7 @@ from types import MethodType
 from typing import Any, Dict
 
 import torch
+from transformers import GenerationMixin
 from transformers.dynamic_module_utils import get_class_from_dynamic_module
 
 from swift.llm import TemplateType
@@ -136,7 +137,19 @@ def get_model_tokenizer_internvl(model_dir: str,
             model.language_model.output.state.force_no_igemmlt = True
 
     if model is not None:
-        use_submodel_func(model, 'language_model')
+        # Some InternVL2 checkpoints load an InternLM2 class without bound generate().
+        # Bind GenerationMixin.generate to keep Swift training/inference compatible.
+        func_list = ['generate', 'get_input_embeddings', 'gradient_checkpointing_enable', 'forward']
+        if hasattr(model, 'language_model') and model.language_model is not None:
+            if not hasattr(model.language_model, 'generate'):
+                try:
+                    model.language_model.generate = MethodType(GenerationMixin.generate, model.language_model)
+                except Exception:
+                    # Fallback: skip generating method remap when binding is not allowed.
+                    pass
+            if not hasattr(model.language_model, 'generate'):
+                func_list = ['get_input_embeddings', 'gradient_checkpointing_enable', 'forward']
+        use_submodel_func(model, 'language_model', func_list=func_list)
         patch_output_clone(model.language_model.get_input_embeddings())
 
     return model, tokenizer

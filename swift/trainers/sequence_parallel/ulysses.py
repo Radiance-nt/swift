@@ -6,7 +6,7 @@ from typing import Any, Optional, Tuple
 
 import torch
 import torch.distributed as dist
-from torch.distributed import init_device_mesh
+from torch.distributed.device_mesh import init_device_mesh
 from transformers import PreTrainedTokenizer
 
 from swift.llm import HfConfigFactory, get_llm_model

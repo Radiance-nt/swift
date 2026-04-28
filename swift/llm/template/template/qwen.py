@@ -309,8 +309,13 @@ class Qwen2VLTemplate(Template):
             video = inputs.videos[index]
             video_inputs = {'video': video}
             if isinstance(video, list):  # image list
-                from qwen_vl_utils import vision_process
-                video_inputs['sample_fps'] = vision_process.FPS
+                # 如果list里是mp4文件，则还原为非list格式
+                if video[0].endswith('.mp4'):
+                    video = video[0]
+                    video_inputs = {'video': video}
+                else:
+                    from qwen_vl_utils import vision_process
+                    video_inputs['sample_fps'] = vision_process.FPS
             video, video_kwargs = fetch_video(video_inputs, return_video_sample_fps=True, **kwargs)
             if self.version == 'v2_5':
                 inputs.mm_processor_kwargs.setdefault('fps', []).append(video_kwargs)
